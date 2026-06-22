@@ -1,0 +1,53 @@
+name: Rain Nowcasting Check
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rain-informer-state
+  cancel-in-progress: false
+
+jobs:
+  check-weather:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run weather check
+        env:
+          TOMORROW_API_KEY: ${{ secrets.TOMORROW_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # Locations are not secret, so they live here directly.
+          # Add the second location's object to this JSON array when ready.
+          LOCATIONS: >-
+            [
+              {"name": "Lake Bloom Residency", "lat": "19.1173", "lon": "72.9067"}
+            ]
+        run: python main.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "rain-informer-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if ! git diff --quiet -- state.json; then
+            git add state.json
+            git commit -m "Update weather state [skip ci]"
+            git push
+          else
+            echo "No state change, skipping commit."
+          fi
