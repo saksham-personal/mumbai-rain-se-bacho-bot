@@ -467,7 +467,9 @@ def check_location(config: dict, location: dict, state: dict) -> bool:
         if not was_raining_last_check:
             # Edge case 1: sudden dry -> wet transition. Alert, override cooldown.
             sent = send_push_notification(
-                topic, f"🚨 Sudden Rain at {name}: It has just started raining!"
+                topic,
+                f"🚨 Sudden Rain at {name}: It has just started raining! "
+                f"({current_intensity:.2f} mm/hr)",
             )
             if sent:
                 commit(now.isoformat(), True)
@@ -487,11 +489,11 @@ def check_location(config: dict, location: dict, state: dict) -> bool:
         if minutes_out > LOOKAHEAD_MINUTES:
             break
         if intensity > RAIN_THRESHOLD_MM_HR:
-            upcoming = (ts, minutes_out)
+            upcoming = (ts, minutes_out, intensity)
             break
 
     if upcoming is not None:
-        _, minutes_out = upcoming
+        _, minutes_out, upcoming_intensity = upcoming
         minutes_out = max(1, round(minutes_out))
         cooldown_elapsed = (
             last_alert_sent is None
@@ -502,7 +504,8 @@ def check_location(config: dict, location: dict, state: dict) -> bool:
             # Edge case 2: expected rain, outside cooldown window.
             sent = send_push_notification(
                 topic,
-                f"⚠️ Rain Warning ({name}): Precipitation expected to start in {minutes_out} minutes.",
+                f"⚠️ Rain Warning ({name}): Precipitation expected to start in {minutes_out} minutes "
+                f"(~{upcoming_intensity:.2f} mm/hr).",
             )
             if sent:
                 commit(now.isoformat(), False)

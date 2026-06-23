@@ -1,0 +1,27 @@
+name = "rain-informer-listener"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+
+# Public endpoint enabled: hitting the URL triggers an immediate poll (handy as
+# a manual "check now" trigger and for debugging). The cron runs it every minute.
+workers_dev = true
+
+[durable_objects]
+bindings = [
+  { name = "NTFY_LISTENER", class_name = "NtfyListener" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NtfyListener"]
+
+# Poll the ntfy topic every minute for "Check" messages and reply.
+# 1 minute is Cloudflare's finest cron granularity -> worst-case ~60s latency.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+GITHUB_STATE_URL = "https://raw.githubusercontent.com/saksham-personal/mumbai-rain-se-bacho-bot/main/state.json"
+
+# NTFY_TOPIC is set separately as a secret (not committed here) — run:
+#   npx wrangler secret put NTFY_TOPIC

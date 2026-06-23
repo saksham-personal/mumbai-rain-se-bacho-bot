@@ -48,9 +48,18 @@ extra API call**:
 request to ntfy.sh — it costs **zero** Tomorrow.io quota. The reply uses the
 *stored* reading, never a fresh forecast call.
 
-**Latency:** because the bot is serverless (it only wakes on the 5-minute
-cron), the reply arrives on the next scheduled run — up to ~5 minutes after you
-send `Check`. The reading itself is also at most ~5 minutes old.
+**Latency:** there are two responders (whichever sees your `Check` first
+answers):
+
+- **Cloudflare Worker (≤60 s)** — see [cloudflare-worker/](cloudflare-worker/).
+  A Durable Object wakes itself every ~60 s, polls the topic, and replies.
+- **GitHub Actions (≤5 min)** — `main.py`'s built-in poll, the always-on
+  fallback if the Worker is ever down.
+
+> **ntfy free-tier limit:** ntfy.sh caps the number of *published* messages per
+> day. Normal use (a few alerts + a few checks per day) stays well under it, but
+> rapid repeated checks can temporarily exhaust the daily quota, after which
+> replies return HTTP 429 until it resets (~24 h).
 
 ## Setup
 
@@ -132,6 +141,33 @@ Set these as `env:` vars in the workflow if you want to override defaults:
 **Actions** tab → **Rain Nowcasting Check** → **Run workflow** to trigger
 manually and confirm a notification arrives (you can temporarily lower
 `RAIN_THRESHOLD_MM_HR` to `0` to force a test alert).
+
+## Instant `Check` responder (Cloudflare Worker)
+
+[cloudflare-worker/](cloudflare-worker/) is an optional add-on that answers
+`Check` in ~60 s instead of ~5 min. It's a Cloudflare Worker whose Durable
+Object self-schedules via the Alarms API (~every 60 s), polls the ntfy topic,
+and replies using the same public `state.json`. It is **stateless about
+content** — it makes no Tomorrow.io calls.
+
+Deploy:
+
+```bash
+cd cloudflare-worker
+npm install
+npx wrangler login                      # one-time, opens browser
+npx wrangler secret put NTFY_TOPIC      # paste your topic
+npx wrangler deploy
+# Bootstrap the alarm loop once:
+curl https://rain-informer-listener.<your-subdomain>.workers.dev
+```
+
+`GITHUB_STATE_URL` in `wrangler.toml` points at the raw `state.json` on GitHub —
+update it if you fork/rename the repo.
+
+> Cloudflare's **Cron Triggers did not fire** on the free account used here, so
+> the Worker relies on **Durable Object alarms**, which do fire reliably. The
+> cron entry in `wrangler.toml` is kept only as a harmless secondary nudge.
 
 ## Notes on the data field
 

@@ -1,0 +1,13 @@
+{
+  "name": "rain-informer-listener",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
