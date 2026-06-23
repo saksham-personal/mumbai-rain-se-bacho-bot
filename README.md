@@ -1,10 +1,13 @@
 # Rain Informer 🌧️ (mumbai-rain-se-bacho-bot)
 
-A serverless rain nowcasting bot. Runs on GitHub Actions every 15 minutes,
+A serverless rain nowcasting bot. Runs on GitHub Actions every 5 minutes,
 checks [Tomorrow.io](https://www.tomorrow.io/)'s minute-by-minute forecast for
 one or more locations, and pushes a free, instant notification via
 [ntfy.sh](https://ntfy.sh) when rain starts or is about to start. No SMS, no
 DLT registration, no recurring cost.
+
+You can also type **`Check`** into the ntfy app to get the last recorded
+rainfall on demand (see [On-demand status](#on-demand-status-check)).
 
 ## How it works
 
@@ -25,12 +28,38 @@ DLT registration, no recurring cost.
 
 State is tracked **per location**, so each place runs its own independent cycle.
 
+## On-demand status (`Check`)
+
+Every poll stores the latest reading (rainfall in mm/hr + the time the API call
+was made) into `state.json`. You can ask for it any time **without spending an
+extra API call**:
+
+1. In the ntfy app, open the subscription and use the **"Type a message…"**
+   field at the bottom.
+2. Send the word **`Check`** (also accepts `status` or `?`).
+3. On the next poll the bot reads that message, and replies with the last
+   stored reading, e.g.:
+
+   > 📊 Rain status
+   > Lake Bloom Residency: 0.12 mm/hr — dry ☀️
+   > (checked 23 Jun, 12:58 IST)
+
+**How it stays free:** reading messages from an ntfy topic is a plain HTTP
+request to ntfy.sh — it costs **zero** Tomorrow.io quota. The reply uses the
+*stored* reading, never a fresh forecast call.
+
+**Latency:** because the bot is serverless (it only wakes on the 5-minute
+cron), the reply arrives on the next scheduled run — up to ~5 minutes after you
+send `Check`. The reading itself is also at most ~5 minutes old.
+
 ## Setup
 
 ### 1. Tomorrow.io API key
 Sign up at [tomorrow.io](https://www.tomorrow.io/weather-api/) (free tier:
-500 calls/day, 25/hour). This bot uses ~96 calls/day per location at the
-15-minute cadence — well within limits even with 2–3 locations.
+500 calls/day, 25/hour). At the 5-minute cadence this bot uses ~288 calls/day
+for one location (12/hour) — within the free limits. Note: a second location
+would double that to ~576/day and exceed the daily cap, so for two+ locations
+either raise the cron interval or use a paid plan.
 
 ### 2. ntfy.sh topic
 Install the **ntfy** app (Android/iOS), tap **+**, and subscribe to a unique,

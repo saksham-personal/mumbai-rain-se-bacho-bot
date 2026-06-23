@@ -2,7 +2,8 @@ name: Rain Nowcasting Check
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Every 5 minutes -> ~288 Tomorrow.io calls/day per location (free tier = 500/day).
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 permissions:

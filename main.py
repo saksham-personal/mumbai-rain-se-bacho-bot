@@ -174,19 +174,21 @@ def load_state() -> dict:
         log.info("Migrating legacy flat state.json to per-location format.")
         return {}
 
-    state = {}
-    for name, entry in data.items():
-        if not isinstance(entry, dict):
-            continue
-        state[name] = {
-            "last_alert_sent": entry.get("last_alert_sent"),
-            "was_raining_last_check": bool(entry.get("was_raining_last_check", False)),
-        }
-    return state
+    # New format is preserved as-is: per-location entries plus a "_meta" block.
+    # Unknown keys (e.g. last_observation) are kept so the status command works.
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
 def get_location_state(state: dict, name: str) -> dict:
-    return state.get(name, dict(DEFAULT_LOCATION_STATE))
+    """Return this location's state, merged over defaults so missing keys are safe."""
+    result = dict(DEFAULT_LOCATION_STATE)
+    entry = state.get(name)
+    if isinstance(entry, dict):
+        result["last_alert_sent"] = entry.get("last_alert_sent")
+        result["was_raining_last_check"] = bool(entry.get("was_raining_last_check", False))
+        if "last_observation" in entry:
+            result["last_observation"] = entry["last_observation"]
+    return result
 
 
 def save_state(state: dict) -> None:
@@ -325,6 +327,94 @@ def send_push_notification(topic: str, message: str, title: str = "Rain Informer
 
 
 # --------------------------------------------------------------------------
+# Interactive "Check" command (read from the ntfy topic, reply with last state)
+# --------------------------------------------------------------------------
+
+IST = timezone(timedelta(hours=5, minutes=30))
+COMMAND_WORDS = {"check", "status", "?"}
+# How far back to look for commands on the very first run (no stored marker).
+COMMAND_FIRST_RUN_WINDOW_SECONDS = 600
+
+
+def read_ntfy_commands(topic: str, since_unix: int) -> list:
+    """
+    Read messages published to the ntfy topic since `since_unix` and return
+    those that look like a status request (e.g. you typed "Check" in the app).
+
+    Reading ntfy is free and uses NO Tomorrow.io quota. Best-effort: on any
+    network/parse error we just return [] and try again next run.
+    """
+    url = f"https://ntfy.sh/{topic}/json"
+    params = {"poll": "1", "since": int(since_unix)}
+    try:
+        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        log.warning("Could not read ntfy messages (command check skipped): %s", exc)
+        return []
+
+    commands = []
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("event") != "message":
+            continue
+        body = str(msg.get("message", "")).strip().lower()
+        if body in COMMAND_WORDS:
+            commands.append(msg)
+    return commands
+
+
+def build_status_message(config: dict, state: dict) -> str:
+    """Compose a human-readable summary of each location's last stored reading."""
+    lines = []
+    for location in config["locations"]:
+        name = location["name"]
+        obs = get_location_state(state, name).get("last_observation")
+        if not obs:
+            lines.append(f"{name}: no reading recorded yet")
+            continue
+        mm = obs.get("intensity_mm_hr")
+        raining = obs.get("is_raining")
+        status = "raining 🌧️" if raining else "dry ☀️"
+        try:
+            when = datetime.fromisoformat(obs["observed_at"]).astimezone(IST).strftime("%d %b, %H:%M")
+        except (KeyError, ValueError, TypeError):
+            when = "unknown time"
+        lines.append(f"{name}: {mm} mm/hr — {status}\n(checked {when} IST)")
+    return "📊 Rain status\n" + "\n".join(lines)
+
+
+def handle_commands(config: dict, state: dict) -> None:
+    """
+    Poll the ntfy topic for "Check"-style messages and reply with the last
+    stored readings. Updates state["_meta"]["last_command_ts"] so the same
+    message is never answered twice.
+    """
+    topic = config["ntfy_topic"]
+    poll_start = int(time.time())
+
+    meta = state.get("_meta", {})
+    since = meta.get("last_command_ts", poll_start - COMMAND_FIRST_RUN_WINDOW_SECONDS)
+
+    commands = read_ntfy_commands(topic, since)
+
+    # Advance the marker regardless, so we never re-answer older messages.
+    state["_meta"] = {**meta, "last_command_ts": poll_start}
+
+    if not commands:
+        return
+
+    log.info("Received %d status command(s); replying with last readings.", len(commands))
+    send_push_notification(topic, build_status_message(config, state), title="Rain Status")
+
+
+# --------------------------------------------------------------------------
 # Core decision logic (per location)
 # --------------------------------------------------------------------------
 
@@ -358,6 +448,21 @@ def check_location(config: dict, location: dict, state: dict) -> bool:
 
     topic = config["ntfy_topic"]
 
+    # Always remember the latest reading so the "Check" command can report it
+    # without spending another API call.
+    observation = {
+        "intensity_mm_hr": round(current_intensity, 3),
+        "is_raining": current_is_raining,
+        "observed_at": now.isoformat(),
+    }
+
+    def commit(last_alert_sent_value, raining_value):
+        state[name] = {
+            "last_alert_sent": last_alert_sent_value,
+            "was_raining_last_check": raining_value,
+            "last_observation": observation,
+        }
+
     if current_is_raining:
         if not was_raining_last_check:
             # Edge case 1: sudden dry -> wet transition. Alert, override cooldown.
@@ -365,13 +470,14 @@ def check_location(config: dict, location: dict, state: dict) -> bool:
                 topic, f"🚨 Sudden Rain at {name}: It has just started raining!"
             )
             if sent:
-                state[name] = {"last_alert_sent": now.isoformat(), "was_raining_last_check": True}
+                commit(now.isoformat(), True)
                 return True
             log.warning("[%s] Sudden-rain alert failed — will retry next run.", name)
+            commit(loc_state["last_alert_sent"], False)  # record reading, keep alert state for retry
             return False
 
         # Edge case 3: already raining last check — stay silent.
-        state[name] = {"last_alert_sent": loc_state["last_alert_sent"], "was_raining_last_check": True}
+        commit(loc_state["last_alert_sent"], True)
         return True
 
     # Currently dry — scan the next LOOKAHEAD_MINUTES for incoming rain.
@@ -399,19 +505,19 @@ def check_location(config: dict, location: dict, state: dict) -> bool:
                 f"⚠️ Rain Warning ({name}): Precipitation expected to start in {minutes_out} minutes.",
             )
             if sent:
-                state[name] = {"last_alert_sent": now.isoformat(), "was_raining_last_check": False}
+                commit(now.isoformat(), False)
                 return True
             log.warning("[%s] Expected-rain alert failed — keeping prior cooldown for retry.", name)
-            state[name] = {"last_alert_sent": loc_state["last_alert_sent"], "was_raining_last_check": False}
+            commit(loc_state["last_alert_sent"], False)
             return False
 
         # Edge case 4: cooldown still active — stay silent.
         log.info("[%s] Upcoming rain but cooldown active (%sh). Silent.", name, COOLDOWN_HOURS)
-        state[name] = {"last_alert_sent": loc_state["last_alert_sent"], "was_raining_last_check": False}
+        commit(loc_state["last_alert_sent"], False)
         return True
 
     # Edge case 5: clear skies — reset for the next wet cycle.
-    state[name] = {"last_alert_sent": loc_state["last_alert_sent"], "was_raining_last_check": False}
+    commit(loc_state["last_alert_sent"], False)
     return True
 
 
@@ -432,6 +538,12 @@ def main() -> int:
         except Exception as exc:  # never let one location kill the whole run
             log.exception("[%s] Unexpected error: %s", location["name"], exc)
             all_ok = False
+
+    # Answer any "Check" messages typed into the ntfy app (free, no API quota).
+    try:
+        handle_commands(config, state)
+    except Exception as exc:
+        log.exception("Command handling failed: %s", exc)
 
     save_state(state)
     return 0 if all_ok else 1
