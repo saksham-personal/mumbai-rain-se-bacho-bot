@@ -2,13 +2,13 @@
   "Lake Bloom Residency": {
     "last_alert_sent": "2026-07-18T03:36:50.626624+00:00",
     "last_observation": {
-      "intensity_mm_hr": 2.34,
-      "is_raining": true,
-      "observed_at": "2026-07-18T03:36:50.626624+00:00"
+      "intensity_mm_hr": 0.0,
+      "is_raining": false,
+      "observed_at": "2026-07-18T05:52:03.277172+00:00"
     },
-    "was_raining_last_check": true
+    "was_raining_last_check": false
   },
   "_meta": {
-    "last_command_ts": 1784345811
+    "last_command_ts": 1784353923
   }
 }
