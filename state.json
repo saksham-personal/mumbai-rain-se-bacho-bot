@@ -4,11 +4,11 @@
     "last_observation": {
       "intensity_mm_hr": 0.0,
       "is_raining": false,
-      "observed_at": "2026-08-03T08:28:48.792377+00:00"
+      "observed_at": "2026-08-03T11:59:05.970720+00:00"
     },
     "was_raining_last_check": false
   },
   "_meta": {
-    "last_command_ts": 1785745729
+    "last_command_ts": 1785758346
   }
 }
